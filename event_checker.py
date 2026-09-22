@@ -2,6 +2,7 @@ import json
 import os
 import re
 import urllib.request
+import urllib.parse
 from html.parser import HTMLParser
 
 import firebase_admin
@@ -99,9 +100,43 @@ class EventTitleParser(HTMLParser):
             self.current_text = []
 
 
+def encode_url(url):
+    """
+    Codiert Umlaute und andere Sonderzeichen korrekt,
+    ohne bereits vorhandene URL-Zeichen zu zerstören.
+    """
+    parts = urllib.parse.urlsplit(url)
+
+    encoded_path = urllib.parse.quote(
+        urllib.parse.unquote(parts.path),
+        safe="/:@",
+    )
+
+    encoded_query = urllib.parse.quote(
+        urllib.parse.unquote(parts.query),
+        safe="=&?/:@",
+    )
+
+    return urllib.parse.urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            encoded_path,
+            encoded_query,
+            parts.fragment,
+        )
+    )
+
+
 def download_page(url):
+    safe_url = encode_url(url)
+
+    print(
+        f"Lade URL: {safe_url}"
+    )
+
     request = urllib.request.Request(
-        url,
+        safe_url,
         headers={
             "User-Agent": "KAMEA-Event-Push/1.0",
             "Accept": "text/html,application/xhtml+xml",
@@ -150,7 +185,9 @@ def load_event_title(event):
 
 
 def clean_event_title(title):
-    title = " ".join(title.split()).strip()
+    title = " ".join(
+        title.split()
+    ).strip()
 
     title = re.sub(
         r"^\[(?:Kamea|Helenesee|Bellevue|Bad Saarow)\]\s*",
@@ -263,7 +300,9 @@ def send_event_push(event):
         topic=TOPIC,
     )
 
-    message_id = messaging.send(message)
+    message_id = messaging.send(
+        message
+    )
 
     print(
         f"Push für Event {event['id']} "
@@ -272,7 +311,9 @@ def send_event_push(event):
 
 
 def main():
-    print("KAMEA Event-Checker gestartet.")
+    print(
+        "KAMEA Event-Checker gestartet."
+    )
 
     current_events = load_current_events()
 
@@ -296,10 +337,10 @@ def main():
         f"Bereits bekannte Events: {len(known_ids)}"
     )
 
-    # Beim ersten Lauf werden vorhandene
-    # Veranstaltungen nur gespeichert.
     if not known_ids:
-        save_known_events(current_ids)
+        save_known_events(
+            current_ids
+        )
 
         print(
             "Erster Lauf: vorhandene Events wurden "
@@ -312,7 +353,9 @@ def main():
 
         return
 
-    new_ids = current_ids - known_ids
+    new_ids = (
+        current_ids - known_ids
+    )
 
     if not new_ids:
         print(
@@ -329,15 +372,21 @@ def main():
         new_ids,
         key=lambda value: int(value),
     ):
-        event = current_events[event_id]
+        event = current_events[
+            event_id
+        ]
 
         try:
-            send_event_push(event)
-            successfully_processed.add(event_id)
+            send_event_push(
+                event
+            )
 
-            # Nach jedem erfolgreich gesendeten Push
-            # sofort speichern. So vermeiden wir
-            # doppelte Pushs bei einem späteren Fehler.
+            successfully_processed.add(
+                event_id
+            )
+
+            # Direkt nach jedem erfolgreichen Push
+            # den Status speichern.
             save_known_events(
                 known_ids
                 | successfully_processed
@@ -345,8 +394,8 @@ def main():
 
         except Exception as error:
             print(
-                f"FEHLER bei Event {event_id}: "
-                f"{error}"
+                f"FEHLER bei Event "
+                f"{event_id}: {error}"
             )
 
             raise
