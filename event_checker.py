@@ -60,6 +60,45 @@ class EventLinkParser(HTMLParser):
         }
 
 
+class EventTitleParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.in_heading = False
+        self.heading_tag = None
+        self.current_text = []
+        self.headings = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+
+        if tag in ("h1", "h2"):
+            self.in_heading = True
+            self.heading_tag = tag
+            self.current_text = []
+
+    def handle_data(self, data):
+        if self.in_heading:
+            self.current_text.append(data)
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+
+        if (
+            self.in_heading
+            and self.heading_tag == tag
+        ):
+            text = " ".join(
+                "".join(self.current_text).split()
+            ).strip()
+
+            if text:
+                self.headings.append(text)
+
+            self.in_heading = False
+            self.heading_tag = None
+            self.current_text = []
+
+
 def download_page(url):
     request = urllib.request.Request(
         url,
@@ -88,6 +127,60 @@ def load_current_events():
     return parser.events
 
 
+def load_event_title(event):
+    try:
+        html = download_page(event["url"])
+
+        parser = EventTitleParser()
+        parser.feed(html)
+
+        for heading in parser.headings:
+            title = clean_event_title(heading)
+
+            if title:
+                return title
+
+    except Exception as error:
+        print(
+            f"Titel für Event {event['id']} "
+            f"konnte nicht geladen werden: {error}"
+        )
+
+    return "Neue KAMEA Veranstaltung"
+
+
+def clean_event_title(title):
+    title = " ".join(title.split()).strip()
+
+    title = re.sub(
+        r"^\[(?:Kamea|Helenesee|Bellevue|Bad Saarow)\]\s*",
+        "",
+        title,
+        flags=re.IGNORECASE,
+    )
+
+    blocked_terms = (
+        "casino",
+        "online casino",
+        "gambling",
+        "slot",
+        "betting",
+    )
+
+    lower_title = title.lower()
+
+    if any(
+        term in lower_title
+        for term in blocked_terms
+    ):
+        return None
+
+    if not title:
+        return None
+
+    return title
+
+
 def load_known_events():
     if not os.path.exists(STATE_FILE):
         return set()
@@ -100,7 +193,10 @@ def load_known_events():
         ) as file:
             data = json.load(file)
 
-        return set(str(value) for value in data)
+        return set(
+            str(value)
+            for value in data
+        )
 
     except Exception:
         return set()
@@ -147,18 +243,22 @@ def initialize_firebase():
 
 
 def send_event_push(event):
+    title = load_event_title(event)
+
+    print(
+        f"Veranstaltungstitel: {title}"
+    )
+
     message = messaging.Message(
         notification=messaging.Notification(
             title="Neue KAMEA Veranstaltung 🎉",
-            body=(
-                "Eine neue Veranstaltung wurde "
-                "veröffentlicht. Jetzt in der KAMEA App ansehen!"
-            ),
+            body=title,
         ),
         data={
             "type": "event",
             "event_id": event["id"],
             "event_url": event["url"],
+            "event_title": title,
         },
         topic=TOPIC,
     )
@@ -166,8 +266,8 @@ def send_event_push(event):
     message_id = messaging.send(message)
 
     print(
-        f"Push für Event {event['id']} gesendet: "
-        f"{message_id}"
+        f"Push für Event {event['id']} "
+        f"gesendet: {message_id}"
     )
 
 
@@ -182,7 +282,10 @@ def main():
             "KAMEA-Webseite gefunden."
         )
 
-    current_ids = set(current_events.keys())
+    current_ids = set(
+        current_events.keys()
+    )
+
     known_ids = load_known_events()
 
     print(
@@ -193,10 +296,8 @@ def main():
         f"Bereits bekannte Events: {len(known_ids)}"
     )
 
-    # Beim allerersten Lauf werden die vorhandenen
+    # Beim ersten Lauf werden vorhandene
     # Veranstaltungen nur gespeichert.
-    # Dadurch bekommen die Nutzer nicht plötzlich
-    # Pushs für alle bereits existierenden Events.
     if not known_ids:
         save_known_events(current_ids)
 
@@ -222,20 +323,37 @@ def main():
 
     initialize_firebase()
 
+    successfully_processed = set()
+
     for event_id in sorted(
         new_ids,
         key=lambda value: int(value),
     ):
         event = current_events[event_id]
 
-        send_event_push(event)
+        try:
+            send_event_push(event)
+            successfully_processed.add(event_id)
 
-    save_known_events(
-        known_ids | current_ids
-    )
+            # Nach jedem erfolgreich gesendeten Push
+            # sofort speichern. So vermeiden wir
+            # doppelte Pushs bei einem späteren Fehler.
+            save_known_events(
+                known_ids
+                | successfully_processed
+            )
+
+        except Exception as error:
+            print(
+                f"FEHLER bei Event {event_id}: "
+                f"{error}"
+            )
+
+            raise
 
     print(
-        f"{len(new_ids)} neue Veranstaltung(en) verarbeitet."
+        f"{len(successfully_processed)} neue "
+        f"Veranstaltung(en) verarbeitet."
     )
 
 
