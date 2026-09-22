@@ -32,14 +32,20 @@ jobs:
 
       - name: Event-Status speichern
         run: |
-          if git diff --quiet known_events.json; then
-            echo "Keine Änderung an known_events.json."
+          if [ ! -f known_events.json ]; then
+            echo "Keine known_events.json vorhanden."
+            exit 1
+          fi
+
+          git add known_events.json
+
+          if git diff --cached --quiet; then
+            echo "Keine Änderung am Event-Status."
             exit 0
           fi
 
           git config user.name "KAMEA Event Bot"
           git config user.email "kamea-event-bot@users.noreply.github.com"
 
-          git add known_events.json
           git commit -m "Update known KAMEA events"
           git push
